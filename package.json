@@ -1,0 +1,24 @@
+{
+  "name": "wx-mp-core",
+  "version": "0.1.0",
+  "description": "Generic building blocks for WeChat Mini Programs — HTTP wrapper, auth, UI tokens, helpers.",
+  "main": "src/index.js",
+  "files": [
+    "src"
+  ],
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {},
+  "keywords": [
+    "wechat",
+    "miniprogram",
+    "wx",
+    "http",
+    "auth"
+  ],
+  "notes": [
+    "Consumed as a git submodule — see README.md. No `npm install` step is needed for consumers.",
+    "Each module is also require()-able directly: `require('wx-mp-core/src/http')`.",
+    "No transpile step. Source is plain ES5/CommonJS compatible with the WeChat developer tools."
+  ]
+}
