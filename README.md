@@ -24,6 +24,7 @@ months of field use.
 | `src/auth.js` | ✅ extracted | from `services/auth.js` (login + profile-setup handshake) |
 | `src/bootstrap.js` | ✅ extracted | env-aware apiBase + privacy consent setup (from `app.js`) |
 | `src/session.js` | ✅ extracted | token/userInfo persistence (cold-start hydration + write-through). Shared by `app.js`, `auth.js`, `http.js` |
+| `src/resource.js` | ✅ extracted | REST CRUD factory: `createResource({http, basePath, decorate})` → list/get/create/update/remove + `custom()` escape hatch |
 | `src/ui/tokens.wxss` | ⏳ planned | will extract the shared design language from `styles/common.wxss` |
 | `src/helpers/login-gate.js` | ⏳ planned | the `requireLoginThen({afterLogin})` pattern (currently lives inside auth.js — split out if a 2nd consumer needs it without the rest of auth) |
 | `src/helpers/pagination.js` | ⏳ planned | cursor-pagination + silent filter pattern |
@@ -263,6 +264,76 @@ App({
 accessors both read from / write to this module — consumers don't
 have to wire anything up. Override per-instance (e.g. tests, plugin
 mode) by passing `getToken` / `setToken` etc. to the factories.
+
+### REST resource factory
+
+`createResource({ http, basePath, decorate, ... })` generates the
+five standard CRUD wrappers (`list`, `get`, `create`, `update`,
+`remove`) for a backend resource, plus a `custom()` escape hatch
+for sub-resources and non-CRUD endpoints.
+
+```js
+const { createResource } = require('wx-mp-core/src/resource');
+const http = require('wx-mp-core/src/http').default;
+
+const activities = createResource({
+  http,
+  basePath: '/api/activities',
+  decorate: (a) => ({
+    ...a,
+    status_text: STATUS_TEXT[a.status],
+    start_time_text: formatTime(a.start_time),
+  }),
+});
+
+// Pure CRUD — list/get/create/update/remove.
+//   list(params) → { activities: [...decorated], next_cursor, has_more }
+//   get(id)       → { id, status_text, ... }  (auto-unwrapped from {activity: ...})
+//   create(data)  → {...decorated}  (auto-unwrapped)
+//   update(id)    → {...decorated}
+//   remove(id)    → {}  (204-style, raw)
+//
+// list/get/create/update pass each item through `decorate`. Pagination
+// fields (next_cursor, has_more, total_count) pass through unchanged.
+
+module.exports = Object.assign({}, activities, {
+  // Sub-resource writes — go through custom() (raw, no decorate)
+  createRegistration(activityId, data) {
+    return activities.custom('POST', `${activityId}/registrations`, data);
+  },
+  completeActivity(id, data) {
+    return activities.custom('POST', `${id}/complete`, data);
+  },
+  // Cross-resource write — different basePath, call directly
+  cancelRegistration(registrationId) {
+    return api.del(`/api/registrations/${registrationId}`);
+  },
+});
+```
+
+Conventions the factory assumes (override via `singular`, `plural`,
+or `unwrap` if your backend differs):
+
+| Endpoint | Response shape | Factory behaviour |
+|---|---|---|
+| `list` | `{ <plural>: [...], ...pagination }` | decorate each item, leave other fields alone |
+| `get` / `create` / `update` | `{ <singular>: {...} }` | unwrap + decorate the single object |
+| `remove` | `{...}` or empty | pass through unchanged |
+
+Singular is auto-derived from the plural (irregulars + 'ies'→'y' +
+'es'→drop rules); override via `singular: 'foo'` when the
+auto-derived form is wrong for your resource name.
+
+`custom()` is the escape hatch for sub-resources and non-CRUD verbs.
+It returns the raw response — no auto-decoration, no auto-unwrap.
+Verbs other than GET/POST/PUT/DELETE fall through to `http.request()`.
+
+Before / after in bmt-game's `services/activity.js`:
+
+- 11 explicit functions → 5 inherited from factory + 8 explicit for
+  sub-resources / custom verbs. Net: 107 → 96 lines, but the surface
+  for **future** services (`users`, `registrations`, `notifications`,
+  ...) drops from ~50 lines per service to ~15.
 
 ## 踩坑记录 (pitfalls worth not re-learning)
 

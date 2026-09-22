@@ -509,6 +509,122 @@ cache (which is the layer every other read actually uses).
   derived notification badge (depends on a backend call), not a
   session fact.
 
+## Phase 8a — `createResource` REST CRUD factory ✅ DONE
+
+The remaining duplication after Phase 7 was in `services/activity.js`:
+five of its ten functions were thin CRUD wrappers that all looked the
+same:
+
+```js
+const getActivities  = (params) => api.get(`/api/activities?...`, params);
+const getActivity    = (id) => api.get(`/api/activities/${id}`);
+const createActivity = (data) => api.post(`/api/activities`, data);
+// ...
+```
+
+Once a second service (e.g. `services/users.js`,
+`services/notifications.js`) shows up, the same five wrappers get
+re-written again. And again. Not worth the duplication.
+
+### The factory: `lib/wx-mp-core/src/resource.js`
+
+```js
+const activities = createResource({
+  http,
+  basePath: '/api/activities',
+  decorate,                        // (item) => decoratedItem
+});
+// → activities.list, .get, .create, .update, .remove, .custom
+```
+
+Conventions baked into the factory:
+
+- list endpoint returns `{ <plural>: [...], ...pagination }` —
+  factory decorates each item, passes other fields through
+- get/create/update return `{ <singular>: {...} }` — factory unwraps
+  and decorates the bare object
+- remove returns whatever the backend returns — pass-through
+
+Auto-derives `singular` from `plural` via a small rules table (plus
+a hand-written irregulars dict for `activities` → `activity`,
+`people` → `person`, etc.). Override via `singular: 'foo'` when the
+auto-derived form is wrong.
+
+`custom(method, suffix, data)` is the escape hatch — sub-resources
+and non-CRUD verbs. Returns the raw response (no decoration, no
+unwrap) by design. Non-CRUD verbs (e.g. `PATCH`) fall through to
+`http.request({ method, url, data })`.
+
+### What stayed in `services/activity.js`
+
+Five things don't fit the pure-CRUD shape, so they remain as
+explicit methods (now using the factory's `custom()` for ones that
+operate under `/api/activities/:id`):
+
+| Old | New | Why explicit |
+|---|---|---|
+| `getMyActivities()` | kept as-is | scoped list, different endpoint |
+| `getActivityRegistrations(id)` | kept as-is | sub-resource GET |
+| `getActivityParticipants(id)` | kept as-is | sub-resource GET |
+| `getActivityMatches(id)` | kept as-is | sub-resource GET |
+| `createRegistration(id, data)` | via `custom('POST', ...)` | sub-resource POST |
+| `completeActivity(id, data)` | via `custom('POST', ...)` | sub-resource POST |
+| `previewCompleteActivity(id, data)` | via `custom('POST', ...)` | sub-resource POST |
+| `cancelRegistration(regId)` | kept as-is | cross-resource (`/api/registrations/:id`) |
+
+### Caller updates
+
+Two call sites used the renamed methods:
+
+- `pages/index/index.js`: `getActivities(params)` → `list(params)`
+- `pages/activity-detail/index.js`: `getActivity(id)` → `get(id)`
+
+Response shapes are unchanged — `list()` returns
+`{activities, next_cursor, has_more}` with each item decorated;
+`get(id)` returns the unwrapped decorated activity. Verified with a
+compat smoke test under Node.
+
+### Verification (this repo)
+
+- 34/34 factory assertions under Node (URL-routed stub http):
+  - all CRUD verbs hit the right URL with the right body
+  - decorate applied per item in list, per single in get/create/update
+  - singular auto-derive works for activities/people/children/users/
+    matches/boxes (incl. the `ies` → `y` rule and the `es` drop rule)
+  - multi-key responses keep the wrapper shape
+  - singular override + `unwrap: false` opt-outs work
+  - custom() returns raw (no decorate), non-CRUD verbs go through
+    http.request
+- 6/6 services/activity.js shape compat assertions: list returns
+  decorated array + pagination, get returns unwrapped decorated
+  object, cancelRegistration returns raw `{ok}`.
+- All 30+ .js files in `bmt-game-miniprogram/` still parse.
+
+### Line-count delta (this repo)
+
+| | Before | After |
+|---|---|---|
+| `services/activity.js` | 107 | 96 |
+| `wx-mp-core/src/resource.js` | — | 192 |
+
+Net is a wash for the one existing service, but the real win is
+**future services**: adding `services/users.js` or
+`services/notifications.js` is now ~15 lines of `createResource` +
+a `decorate` function, vs. ~50+ lines of explicit CRUD wrappers.
+
+### Phase 8b (deferred) — `createListController`
+
+The lifecycle mixin candidate for `pages/index`,
+`pages/my-registrations`, `pages/notifications`, etc. Higher impact
+than Phase 8a (eliminates ~30 lines per list page) but higher risk —
+WeChat's `Page({})` doesn't accept hooks, so the helper has to
+inject `onLoad` / `onShow` / `onPullDownRefresh` / `onReachBottom`
+via a mixin, which is fiddly to test without devtools.
+
+Recommended order: roll Phase 8b in one page first as a probe,
+verify the mixin doesn't conflict with the page's own lifecycle
+methods, then expand.
+
 ## Open questions
 
 - Should `wx-mp-core` expose its own TypeScript definitions? WeChat
