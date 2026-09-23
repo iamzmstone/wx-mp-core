@@ -69,6 +69,14 @@
  *   - `custom()` falls through to whatever HTTP method matches the
  *     string passed (GET/POST/PUT/DELETE → http.get/post/put/delete).
  *     Other verbs go through `http.request()`.
+ *   - `list()` strips null/undefined/empty-string params before
+ *     passing them to `http.get()`. WeChat's `wx.request` serializes
+ *     `null` as `key=` (empty value) and `undefined` inconsistently
+ *     across base lib versions, which some backends treat differently
+ *     from "no param at all". This matches the hand-rolled URL
+ *     building the consumer code used to do before the factory.
+ *     Override via `cleanParams: false` if you want the raw params
+ *     passed through.
  */
 
 const SINGULAR_OVERRIDES = {
@@ -125,6 +133,7 @@ function createResource(options) {
   const plural = opts.plural || lastSegment(base);
   const singular = opts.singular != null ? opts.singular : deriveSingular(plural);
   const unwrap = opts.unwrap !== false; // default true
+  const cleanListParams = opts.cleanParams !== false; // default true
 
   function buildUrl(suffix) {
     return suffix != null && suffix !== '' ? `${base}/${suffix}` : base;
@@ -171,7 +180,15 @@ function createResource(options) {
     singular,
 
     list(params) {
-      return http.get(buildUrl(), params).then(decorateListResponse);
+      // 踩坑: WeChat's wx.request serializes null/undefined into the
+      // query string inconsistently (`cursor=` for null, omitted for
+      // undefined). Some backends treat `?cursor=` differently from
+      // no cursor at all and either error out or page through stale
+      // results. Strip falsy params before passing to http.get to
+      // match the hand-rolled URL-building the consumer used to do.
+      // Set `cleanParams: false` in createResource() to opt out.
+      const cleaned = cleanListParams ? cleanParams(params) : params;
+      return http.get(buildUrl(), cleaned).then(decorateListResponse);
     },
     get(id) {
       return http.get(buildUrl(id)).then(decorateOneResponse);
@@ -200,6 +217,17 @@ function createResource(options) {
       return call(verb, suffix, data);
     },
   };
+}
+
+function cleanParams(params) {
+  if (!params || typeof params !== 'object') return undefined;
+  const out = {};
+  for (const k of Object.keys(params)) {
+    const v = params[k];
+    if (v == null || v === '') continue;
+    out[k] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 module.exports = { createResource, deriveSingular };
