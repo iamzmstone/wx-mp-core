@@ -355,8 +355,10 @@ silently fails in release builds. `http.absUrl()` upgrades `http://`
 
 ### 3. Privacy consent (base lib 3.0.0+, especially 3.16.x)
 
-The custom `wx.onNeedPrivacyAuthorization` handler is **broken** in
-base lib 3.16.x in two specific ways:
+The踩坑 is real for `wx.showModal` inside the custom handler: it does
+**not** pause the flow on base lib 3.16.x — `chooseAvatar` fails with
+"privacy permission is not authorized" before the user can tap. The
+specific base-lib issue list:
 
 - `wx.showModal` inside the handler does not actually pause the flow:
   `chooseAvatar` fails with "privacy permission is not authorized"
@@ -366,11 +368,32 @@ base lib 3.16.x in two specific ways:
   user agrees in the contract view, `chooseAvatar` still fails with
   "or buttonId is wrong".
 
+**Workaround** (used by showme-photos): register the handler, but use
+a **real WXML page** (via `wx.navigateTo`) instead of `wx.showModal`.
+`wx.navigateTo` does pause the calling context, so the user actually
+gets to read the policy and tap a button. The trade-off:
+
+- The original privacy-sensitive API (e.g. `chooseAvatar`) still
+  resolves with `disagree` and fails — the user retries after
+  tapping "同意" in the consent page.
+- This is审-friendly (the policy is visibly shown, the user explicitly
+  chooses) and works on 3.4.6+ — the踩坑 only applies to `wx.showModal`.
+
+The consumer is expected to provide the consent page; the bootstrap
+helper takes an optional `consentPath` argument (default
+`/pages/privacy/index`) so it can navigate there. The page itself
+writes `{agreed: true, accepted_at: ISO}` to `wx.storage` under
+`privacy_consent_v1`; the handler reads from there.
+
+Don't open `wx.openPrivacyContract` inline from the consent page
+either — also invalidates `buttonId`. Keep the policy text **inline**
+in the WXML.
+
 WeChat's built-in consent dialog runs in the same page context and
 doesn't have either problem. The only requirement is that the privacy
 contract is set up in the MP console. **Don't register a custom
-handler** unless you have a 3.17+ base lib baseline and have tested
-both flows.
+handler that uses `wx.showModal`** — use a page instead, on any base
+lib.
 
 A minimal diagnostic for silent picker failures:
 

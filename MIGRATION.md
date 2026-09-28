@@ -383,11 +383,16 @@ side effects):
   host for the current `envVersion`. Reads
   `wx.getAccountInfoSync().miniProgram.envVersion`, falls back if
   the API throws or returns an unknown value.
-- `setupPrivacyConsent(logger)` — logs the current privacy state
-  via `wx.getPrivacySetting` and explicitly does **not** register a
-  custom `wx.onNeedPrivacyAuthorization` handler. WeChat's
-  built-in consent dialog is the only thing that works on base lib
-  3.16.x (the踩坑 details are in README.md).
+- `setupPrivacyConsent(logger, consentPath?)` — logs the current
+  privacy state via `wx.getPrivacySetting` and registers a custom
+  `wx.onNeedPrivacyAuthorization` handler that defers to the
+  consumer's `wx.storage` consent record (`privacy_consent_v1`). When
+  no prior consent is recorded, the handler navigates to the consent
+  page (default `/pages/privacy/index`, override via second arg) using
+  `wx.navigateTo` — **NOT** `wx.showModal`, which on base lib 3.16.x
+  doesn't pause the flow. The trade-off: the privacy-sensitive API
+  still resolves with `disagree`; the user retries after agreeing.
+  This is审-friendly and works on 3.4.6+.
 
 ### The wrapper: `bmt-game-miniprogram/app.js`
 
