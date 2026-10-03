@@ -8,14 +8,11 @@
  *      — pick the right backend host per `envVersion`
  *        (develop / trial / release).
  *
- *   2. setupPrivacyConsent(logger, consentPath?)
- *      — log the privacy state AND register a custom
- *        `wx.onNeedPrivacyAuthorization` handler that defers to the
- *        consumer's `wx.storage` consent record. The handler resolves
- *        `{event: 'agree'}` only when the user has previously tapped
- *        "agree" in the consent page; otherwise it routes to the
- *        consent page (a real WXML page, NOT `wx.showModal` — see
- *        README.md pitfall #3) and resolves `{event: 'disagree'}`.
+ *   2. setupPrivacyConsent(logger)
+ *      — log the privacy state. Intentionally does NOT register a custom
+ *        `wx.onNeedPrivacyAuthorization` handler. WeChat's built-in
+ *        consent dialog is the only thing that works reliably on
+ *        base lib 3.16.x; the踩坑 details are in README.md.
  *
  * Both helpers are intentionally stateless (no shared state, no
  * side effects beyond the explicit ones listed below) so the
@@ -60,46 +57,27 @@ function resolveApiBase(envMap, fallback) {
 }
 
 /**
- * The wx.storage key the consumer writes its consent record to. The
- * consumer (app.js + pages/privacy/index) is responsible for setting
- * this; the handler only reads it.
- */
-const CONSENT_KEY = 'privacy_consent_v1';
-
-/**
- * Default path to the consumer's consent page. Override via the
- * `consentPath` argument to setupPrivacyConsent if your project lays
- * the consent page elsewhere.
- */
-const DEFAULT_CONSENT_PATH = '/pages/privacy/index';
-
-/**
- * Log the current privacy state and register a custom
- * `wx.onNeedPrivacyAuthorization` handler.
+ * Log the current privacy state. Intentionally does NOT register a
+ * custom `wx.onNeedPrivacyAuthorization` handler.
  *
- * The handler does NOT block on user input — it only reads the existing
- * consent record and either resolves 'agree' (consented) or 'disagree'
- * (not consented, also navigates the user to the consent page so they
- * can opt in). Once the user agrees in the consent page and re-tries
- * the privacy-sensitive API (e.g. taps the chooseAvatar button again),
- * the handler will see the consent record and resolve 'agree'.
+ * 踩坑: the custom handler path is broken in base lib 3.16.x in two
+ * specific ways (see README.md for the full list):
+ *   - `wx.showModal` inside the callback doesn't actually pause the
+ *     flow — `chooseAvatar` fails with "privacy permission is not
+ *     authorized" before the user can tap anything.
+ *   - `wx.openPrivacyContract` navigates to a new page, which
+ *     invalidates the `<button open-type="chooseAvatar">`'s
+ *     `buttonId`. Even after the user agrees in the contract view,
+ *     `chooseAvatar` still fails with "or buttonId is wrong".
  *
- * Why this design (instead of `wx.showModal` inside the handler):
- *   - `wx.showModal` inside `onNeedPrivacyAuthorization` does not
- *     pause the flow on base lib 3.16.x: `chooseAvatar` fails with
- *     "privacy permission is not authorized" before the user can tap.
- *   - We use a real WXML page via `wx.navigateTo`, which DOES pause
- *     the current task context and gives the user time to read and
- *     decide. The trade-off is that the original API call still
- *     fails with `disagree`; the user retries after agreeing. This
- *     is审-friendly (visible, opt-in flow) and works on 3.4.6+ base
- *     libs (the踩坑 only applies to `wx.showModal`).
+ * WeChat's built-in consent dialog runs in the same page context
+ * and does not have either problem. The only requirement is that
+ * the privacy contract is set up in the MP console.
  *
  * `logger` defaults to `console`; pass a no-op logger in tests.
  */
-function setupPrivacyConsent(logger, consentPath) {
+function setupPrivacyConsent(logger) {
   const log = logger || console;
-  const consentPage = consentPath || DEFAULT_CONSENT_PATH;
   try {
     if (wx.getPrivacySetting) {
       wx.getPrivacySetting({
@@ -107,34 +85,7 @@ function setupPrivacyConsent(logger, consentPath) {
         fail: (err) => log.warn('[privacy] getPrivacySetting failed', err),
       });
     }
-    if (wx.onNeedPrivacyAuthorization) {
-      // 踩坑: base lib 3.17.x 改了 API。回调不再接收 `resolve` 函数,
-      // 而是把返回值当作 resolution — Promise.resolve({event: 'agree'|'disagree'})。
-      // 旧写法调用 `resolve(...)` 会抛 "resolve is not a function",
-      // chooseAvatar / getUserProfile 等隐私敏感 API 因此失败。
-      wx.onNeedPrivacyAuthorization(({ event }) => {
-        let c = null;
-        try { c = wx.getStorageSync(CONSENT_KEY) || null; } catch (_) { c = null; }
-        if (c && c.agreed === true) {
-          return Promise.resolve({ event: 'agree' });
-        }
-        // 没同意 → 跳同意页(用 navigateTo 而非 showModal,绕开踩坑)
-        try {
-          wx.navigateTo({
-            url: consentPage + '?from=handler&force=1',
-            fail: (err) => log.warn('[privacy] navigateTo consent page failed', err),
-          });
-        } catch (e) {
-          log.warn('[privacy] navigateTo threw', e);
-        }
-        // 当前 API 调用仍以 'disagree' 失败;用户回到原页面后,
-        // 重试触发 chooseAvatar 等,handler 看到同意状态 → 返回 agree。
-        return Promise.resolve({ event: 'disagree' });
-      });
-      log.log('[privacy] registered onNeedPrivacyAuthorization handler');
-    } else {
-      log.log('[privacy] wx.onNeedPrivacyAuthorization unavailable (too old base lib)');
-    }
+    log.log('[privacy] using WeChat built-in consent UI (no custom handler)');
   } catch (e) {
     log.warn('[privacy] setupPrivacyConsent threw', e);
   }
