@@ -108,12 +108,15 @@ function setupPrivacyConsent(logger, consentPath) {
       });
     }
     if (wx.onNeedPrivacyAuthorization) {
-      wx.onNeedPrivacyAuthorization(({ event, resolve }) => {
+      // 踩坑: base lib 3.17.x 改了 API。回调不再接收 `resolve` 函数,
+      // 而是把返回值当作 resolution — Promise.resolve({event: 'agree'|'disagree'})。
+      // 旧写法调用 `resolve(...)` 会抛 "resolve is not a function",
+      // chooseAvatar / getUserProfile 等隐私敏感 API 因此失败。
+      wx.onNeedPrivacyAuthorization(({ event }) => {
         let c = null;
         try { c = wx.getStorageSync(CONSENT_KEY) || null; } catch (_) { c = null; }
         if (c && c.agreed === true) {
-          resolve({ event: 'agree' });
-          return;
+          return Promise.resolve({ event: 'agree' });
         }
         // 没同意 → 跳同意页(用 navigateTo 而非 showModal,绕开踩坑)
         try {
@@ -125,8 +128,8 @@ function setupPrivacyConsent(logger, consentPath) {
           log.warn('[privacy] navigateTo threw', e);
         }
         // 当前 API 调用仍以 'disagree' 失败;用户回到原页面后,
-        // 重试触发 chooseAvatar 等,handler 看到同意状态 → resolve agree。
-        resolve({ event: 'disagree' });
+        // 重试触发 chooseAvatar 等,handler 看到同意状态 → 返回 agree。
+        return Promise.resolve({ event: 'disagree' });
       });
       log.log('[privacy] registered onNeedPrivacyAuthorization handler');
     } else {
