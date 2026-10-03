@@ -43,6 +43,12 @@ const session = require('./session');
 
 const DEFAULTS = {
   getApiBase: () => '',
+  // Static-asset base URL. Used by `absUrl` for paths starting with
+  // `/static/` (avatars, OSS-served photos mirrored locally, etc.).
+  // Defaults to apiBase — same backend serves API + static in this
+  // project — but can be overridden in the consumer's app.js (e.g.
+  // point at a CDN without touching every call site).
+  getStaticBase: null,
   getToken: () => null,
 
   // Called on 401. Receives { redirectUrl } so the consumer can decide
@@ -197,19 +203,29 @@ function createHttp(userOptions) {
 
   /**
    * Resolve a server-relative path (e.g. "/static/uploads/...") against
-   * the current apiBase. Absolute URLs pass through, except for two
-   * legacy cases we normalise so <image> doesn't fail in release builds:
+   * the current apiBase (or staticBase for `/static/*` paths). Absolute
+   * URLs pass through, except for two legacy cases we normalise so
+   * <image> doesn't fail in release builds:
    *   1. http:// — WeChat rejects non-HTTPS in production.
    *   2. http(s)://127.0.0.1[:port] — older dev uploads stored an
    *      absolute dev URL in the DB; re-anchor on the current apiBase.
+   *
+   * `/static/*` is treated specially: it's served from the same backend
+   * as the API in this project, but `getStaticBase` lets the consumer
+   * point at a CDN independently. `getStaticBase` defaults to apiBase.
    */
   function absUrl(path) {
     if (!path) return '';
     const apiBase = opts.getApiBase();
+    const staticBase = opts.getStaticBase ? opts.getStaticBase() : apiBase;
     if (/^https?:\/\//.test(path)) {
       return path
         .replace(/^https?:\/\/127\.0\.0\.1(:\d+)?/, apiBase)
         .replace(/^http:\/\//, 'https://');
+    }
+    // /static/* uses staticBase; everything else uses apiBase.
+    if (path.charCodeAt(0) === 47 /* '/' */ && path.startsWith('/static/')) {
+      return staticBase + path;
     }
     return apiBase + path;
   }
@@ -244,6 +260,14 @@ const defaultHttp = createHttp({
     // bootstrap.resolveApiBase() in app.js's onLaunch.
     const app = typeof getApp === 'function' ? getApp() : null;
     return (app && app.globalData && app.globalData.apiBase) || '';
+  },
+  // staticBaseUrl defaults to apiBase. Apps that front the static dir
+  // with a CDN can set app.globalData.staticBaseUrl in onLaunch to
+  // override. absUrl uses this only for paths starting with `/static/`.
+  getStaticBase: () => {
+    const app = typeof getApp === 'function' ? getApp() : null;
+    const gd = app && app.globalData;
+    return (gd && gd.staticBaseUrl) || (gd && gd.apiBase) || '';
   },
   // Delegate token reads to the shared session module so the auth
   // factory and the http wrapper always see the same source.
