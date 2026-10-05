@@ -177,6 +177,7 @@ function createHttp(userOptions) {
         url: apiBase + url,
         filePath,
         name,
+        formData: uo.formData || {},
         header: {
           'Authorization': token ? `Bearer ${token}` : '',
         },
